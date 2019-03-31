@@ -23,16 +23,22 @@ class Proxy:
             conn, addr = self.server.accept()
             print('Connection received from host address: {}'.format(addr))
             print(self.services)
-            thread = threading.Thread(target=self.clientService)
+            thread = threading.Thread(target=self.clientService, args=(conn,))
             thread.start()
             self.services = [service for service in self.services if service.isAlive()]
             self.services.append(thread)
-            # Remaining logic
-            conn.close()
 
-    def clientService(self):
-        # message = self.server.recv(1024)
-        print('Client service called')
+    def clientService(self, conn):
+        # HTTP request
+        message = conn.recv(1024)
+        
+        # Send request to server
+        # Get response from server
+        # Cache it
+        
+        # Send response
+        conn.send(b'Acknowledgement')
+        conn.close()
             
 
 proxy = Proxy(PORT, HOST)
