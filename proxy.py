@@ -31,8 +31,8 @@ class Proxy:
 
         while True:
             try:
-                conn, addr = self.server.accept()
-                print('Connection received from host address: {}'.format(addr))
+                (conn, addr) = self.server.accept()
+                print('[log] Connection received from host address: {}'.format(addr))
                 # print(self.services)
                 thread = threading.Thread(target=self.clientService, args=(conn, addr))
                 thread.start()
@@ -60,7 +60,29 @@ class Proxy:
         try:
             # HTTP request
             request = str(conn.recv(BUFFER_SIZE))
-            print(request)
+
+            (server, port, filename) = self.requestInfo(request)
+            print('Server: {}, Port: {}, File: {}'.format(server, port, filename))
+
+            # Connect to server
+            try:
+                server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                server_sock.connect((server, port))            
+            except Exception as e:
+                print('[log] Error: {}'.format(e))
+                conn.send('Unable to connect with server\n'.encode('utf-8'))
+                conn.close()
+                return
+            
+            if filename in os.listdir('./.cache'):
+                server_sock.send('GET /' + filename + ' HTTP/1.1\r\nIf-Modified-Since: ' + time.ctime(os.path.getmtime('./.cache/' + filename)) + ' \r\n\r\n')
+            else:
+                server_sock.send('GET /' + filename + 'HTTP/1.1\r\n\r\n')
+
+            server_res = str(server_sock.recv(BUFFER_SIZE))
+
+            print(server_res)
+
             # Send request to server
             # Get response from server
             # Cache it
@@ -69,7 +91,43 @@ class Proxy:
             conn.send('Acknowledgement\n'.encode('utf-8'))
         except Exception as e:
             print('[log] Error: {}'.format(e))
+            conn.send('Error in connecting to server, try again later\n'.encode('utf-8'))
         conn.close()
+
+    def requestInfo(self, request):
+        url = request.split()[1]
+        # line = request.split('\r\n')[0]
+        # url = line.split()[1]
+
+        no_protocol = url.find('://')
+        
+        if no_protocol == -1:
+            host_url = url
+        else:
+            host_url = url[(no_protocol + 3):]
+
+        port_start = host_url.find(':')
+        port_end = host_url.find('/')
+
+        if port_end == -1:
+            port_end = len(host_url)
+
+        server = ''
+        port = -1
+
+        if port_start == -1 or port_end < port_start:
+            port = 20101
+            server = host_url[:port_end]
+        else:
+            port = int((host_url[(port_start + 1):])[:port_end - port_start - 1])
+            server = host_url[:port_start]
+        
+        try:
+            filename = host_url.split('/')[1]
+        except IndexError:
+            filename = '/'
+
+        return (server, port, filename)
             
 
 proxy = Proxy(PORT, HOST)
