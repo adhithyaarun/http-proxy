@@ -4,7 +4,7 @@ import sys
 import threading
 import time
 
-BUFFER_SIZE = 1024
+BUFFER_SIZE = 4096
 MAX_CONNECTION = 25
 
 PORT = 20100
@@ -74,21 +74,45 @@ class Proxy:
                 conn.close()
                 return
             
+            # Send request to server
             if filename in os.listdir('./.cache'):
                 server_sock.send('GET /' + filename + ' HTTP/1.1\r\nIf-Modified-Since: ' + time.ctime(os.path.getmtime('./.cache/' + filename)) + ' \r\n\r\n')
             else:
                 server_sock.send('GET /' + filename + 'HTTP/1.1\r\n\r\n')
 
-            server_res = str(server_sock.recv(BUFFER_SIZE))
-
-            print(server_res)
-
-            # Send request to server
             # Get response from server
-            # Cache it
+            response = str(server_sock.recv(BUFFER_SIZE))
+
+            print(response)
             
-            # Send response
-            conn.send('Acknowledgement\n'.encode('utf-8'))
+            # Cache it
+            if response.find('200') != -1:
+                f = open(os.path.join('./.cache/', filename), 'wb')
+                while True:
+                    if len(response) > 0:
+                        f.write(response.encode('utf-8'))
+                        conn.send(response.encode('utf-8'))
+                        # res_size = float(len(response)) / 1024
+                        # print('[log] Request serviced by server \n\tfile: {}\n\tsize: {}'.format(filename, res_size))
+                        response = str(server_sock.recv(BUFFER_SIZE))
+                    else:
+                        break
+                f.close()
+            elif response.find('304') != -1:
+                # print('[log] Request serviced from cache \n\tfile: {}\n\tsize: {}'.format(filename, res_size))
+                f = open(os.path.join('./.cache/', filename), 'rb')
+                line = f.read(BUFFER_SIZE)
+                while line:
+                    conn.send(line)
+                    line = f.read(BUFFER_SIZE)
+                f.close()
+            else:
+                print('[log] Response from server: {}'.format(response))
+
+            # conn.send('Acknowledgement\n'.encode('utf-8'))
+
+            server_sock.close()
+            conn.close()
         except Exception as e:
             print('[log] Error: {}'.format(e))
             conn.send('Error in connecting to server, try again later\n'.encode('utf-8'))
