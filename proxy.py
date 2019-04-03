@@ -6,14 +6,14 @@ import sys
 import threading
 import time
 
-BUFFER_SIZE = 4096
+BUFFER_SIZE = 1024
 MAX_CONNECTION = 25
 ALLOWED_ACTIONS = ['GET', 'POST']
 CACHE_SIZE = 3
+BLACK_LIST = []
 
 PORT = 20100
 HOST = ''
-
 
 class Proxy:
     def __init__(self, port, hostname):
@@ -71,7 +71,7 @@ class Proxy:
         '''Client end of the Proxy Server, that will make requests to servers,
         get data and send to the client'''
         if addr[1] < 20000 or addr[1] > 20099:
-            conn.send('Access denied.\n'.encode('utf-8'))
+            conn.send('HTTP/1.1 401 Access denied.'.encode('utf-8'))
             conn.close()
             print('[log] Connection from host: {}, port: {} denied'.format(
                 addr[0], addr[1]))
@@ -86,14 +86,15 @@ class Proxy:
 
             # Reject requests that are not GET or POST
             if req_type not in ALLOWED_ACTIONS:
-                conn.send('Invalid action\n'.encode('utf-8'))
+                conn.send('HTTP/1.1 400 Bad request'.encode('utf-8'))
                 conn.close()
                 print('[log] {} request from host: {}, port: {} denied'.format(
                     req_type, addr[0], addr[1]))
                 return
 
+            # Invalid port
             if port > 20200 or port < 20101:
-                conn.send('Invalid action\n'.encode('utf-8'))
+                conn.send('HTTP/1.1 403 Forbidden'.encode('utf-8'))
                 conn.close()
                 print('[log] Request from host: {}, port: {} to host: {}, port: {} denied'.format(
                     addr[0], addr[1], server, port))
@@ -105,7 +106,7 @@ class Proxy:
                 server_sock.connect((server, port))
             except Exception as e:
                 print('[log] Error: {}'.format(str(e)))
-                conn.send('Unable to connect with server\n'.encode('utf-8'))
+                conn.send('HTTP/1.1 500 Internal server error'.encode('utf-8'))
                 conn.close()
                 return
 
@@ -118,47 +119,54 @@ class Proxy:
                 server_sock.send(http_request.encode('utf-8'))
 
             # Get response from server
-            response = str(server_sock.recv(BUFFER_SIZE))[2:-1]
-
-            print(response)
+            response = server_sock.recv(BUFFER_SIZE).decode()
 
             # Use cache, or update cache
             if response.find('200') != -1:
                 f = open(os.path.join(
                     './.cache/', str(filename + server + str(port))), 'wb')
+                # Headers
+                content = server_sock.recv(BUFFER_SIZE).decode()
+                content = server_sock.recv(BUFFER_SIZE).decode()
+                content = server_sock.recv(BUFFER_SIZE).decode()
+                content = server_sock.recv(BUFFER_SIZE).decode()
+                content = ''
                 while True:
-                    response = str(server_sock.recv(BUFFER_SIZE))[2:-1]
+                    response = server_sock.recv(BUFFER_SIZE).decode()
                     if len(response) > 0:
-                        print('Length: {}'.format(len(response)))
                         f.write(response.encode('utf-8'))
-                        conn.send(response.encode('utf-8'))
+                        content += response
                         # res_size = float(len(response)) / 1024
-                        # print('[log] Request serviced by server \n\tfile: {}\n\tsize: {}'.format(filename, res_size))
-                        response = str(server_sock.recv(BUFFER_SIZE))[2:-1]
+                        # print('[log] Request serviced by server \n\tfile: {}\n\tsize: {} MB'.format(filename, res_size))
                     else:
                         break
                 f.close()
+                conn.send(str('HTTP/1.1 200 OK\r\n\r\n' + content).encode('utf-8'))
+
             elif response.find('304') != -1:
                 f = open(os.path.join(
                     './.cache/', str(filename + server + str(port))), 'rb')
-                line = str(f.read(BUFFER_SIZE))
-                while line:
-                    conn.send(line.encode('utf-8'))
+                line = f.read(BUFFER_SIZE).decode()
+                content = ''
+                while len(line) > 0:
+                    content += line 
                     # res_size = float(len(line) / 1024)
-                    # print('[log] Request serviced from cache \n\tfile: {}\n\tsize: {}'.format(filename, res_size))
-                    line = str(f.read(BUFFER_SIZE))
+                    # print('[log] Request serviced from cache \n\tfile: {}\n\tsize: {} MB'.format(filename, res_size))
+                    line = f.read(BUFFER_SIZE).decode()
                 f.close()
+                conn.send(str('HTTP/1.1 200 OK\r\n\r\n' + content).encode('utf-8'))
+
             elif response.find('404') != -1:
-                conn.send('File not found\n'.encode('utf-8'))
+                conn.send('HTTP/1.1 404 File not found\r\n\r\n'.encode('utf-8'))
                 conn.close()
                 print('[log] Requested file not found')
                 return
+
             else:
                 print('[log] Response from server: {}'.format(response))
 
             server_sock.close()
             conn.close()
-            # conn.send('Acknowledgement\n'.encode('utf-8'))
         except Exception as e:
             print('[log] Error: {}'.format(str(e)))
             conn.send(
@@ -203,6 +211,17 @@ class Proxy:
 
         return (req_type, server, port, filename)
 
+# Generating the blacklist
+f = open('./blacklist.txt', 'r')
+blacklist = f.read()
+entries = blacklist.split('\n')
+while len(blacklist) > 0:
+    for entry in entries:
+        if len(entry) > 0:
+            info = entry.split()
+            BLACK_LIST.append((info[0], info[1]))
+    blacklist  = f.read()
+    entries = blacklist.split('\n')
 
 proxy = Proxy(PORT, HOST)
 if proxy.server:
