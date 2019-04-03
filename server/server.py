@@ -1,44 +1,76 @@
-#!/usr/bin/python
-
-import sys
 import os
+from http.server import SimpleHTTPRequestHandler
+import socketserver
+import threading
 import time
-import SocketServer
-import SimpleHTTPServer
 
-if len(sys.argv) < 2:
-    print "Needs one argument: server port"
-    raise SystemExit
-
-PORT = int(sys.argv[1])
+threads = []
 
 
-class HTTPCacheRequestHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
-    def send_head(self):
-        if self.command != "POST" and self.headers.get('If-Modified-Since', None):
-            filename = self.path.strip("/")
-            if os.path.isfile(filename):
-                a = time.strptime(time.ctime(
-                    os.path.getmtime(filename)), "%a %b %d %H:%M:%S %Y")
+class HTTPCacheRequestHandler(SimpleHTTPRequestHandler):
+    def do_GET(self):
+        filename = self.path.strip('/')
+        try:
+            f = open(os.path.join('./', filename), 'r')
+        except Exception:
+            self.send_response(404)
+            self.end_headers()
+            self.wfile.write('File not found\r\n\r\n'.encode())
+            return
+
+        if self.headers.get('If-Modified-Since', None):
+            if os.path.isfile(os.path.join('./', filename)):
+                a = time.gmtime(time.mktime(time.strptime(time.ctime(
+                    os.path.getmtime(filename)), "%a %b %d %H:%M:%S %Y")))
                 b = time.strptime(self.headers.get(
-                    'If-Modified-Since', None), "%a %b  %d %H:%M:%S %Z %Y")
+                    'If-Modified-Since', None), "%a, %d %b %Y %H:%M:%S GMT")
                 if a < b:
                     self.send_response(304)
                     self.end_headers()
-                    return None
-        return SimpleHTTPServer.SimpleHTTPRequestHandler.send_head(self)
+                else:
+                    print(a > b)
+                    self.send_response(200)
+                    self.send_header('Cache-control', 'must-revalidate')
+                    self.end_headers()
+                    data = f.read()
+                    self.wfile.write(data)
+        else:
+            self.send_response(200)
+            self.send_header('Cache-control', 'must-revalidate')
+            self.end_headers()
+            f = open(os.path.join('./', filename), 'r')
+            data = f.read()
+            self.wfile.write(data.encode())
 
-    def end_headers(self):
-        self.send_header('Cache-control', 'must-revalidate')
-        SimpleHTTPServer.SimpleHTTPRequestHandler.end_headers(self)
+        return
 
     def do_POST(self):
-        self.send_response(200)
-        self.send_header('Cache-control', 'no-cache')
-        SimpleHTTPServer.SimpleHTTPRequestHandler.end_headers(self)
+        filename = self.path.strip('/')
+        try:
+            f = open(os.path.join('./', filename), 'r')
+            data = f.read()
+            self.wfile.write(data.encode())
+        except Exception:
+            self.send_response(404)
+            self.end_headers()
+            self.wfile.write('File not found\r\n\r\n'.encode())
 
 
-s = SocketServer.ThreadingTCPServer(("", PORT), HTTPCacheRequestHandler)
-s.allow_reuse_address = True
-print "Serving on port", PORT
-s.serve_forever()
+http1 = socketserver.TCPServer(('', 20150), HTTPCacheRequestHandler)
+# http2 = socketserver.TCPServer(('', 20104), HTTPCacheRequestHandler)
+# http3 = socketserver.TCPServer(('', 20152), HTTPCacheRequestHandler)
+# http2 = socketserver.TCPServer(('', 20105), HTTPCacheRequestHandler)
+# http3 = socketserver.TCPServer(('', 20106), HTTPCacheRequestHandler)
+
+# threads.append(threading.Thread(target=http1.serve_forever))
+# threads.append(threading.Thread(target=http2.serve_forever))
+# threads.append(threading.Thread(target=http3.serve_forever))
+
+# for t in threads:
+#     t.start()
+
+# for t in threads:
+#     t.join()
+http1.serve_forever()
+# http2.serve_forever()
+# http3.serve_forever()

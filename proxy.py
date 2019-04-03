@@ -4,16 +4,24 @@ import socket
 import sys
 import threading
 import time
+import ipaddress
 
 BUFFER_SIZE = 1024
 MAX_CONNECTION = 25
 ALLOWED_ACTIONS = ['GET', 'POST']
 CACHE_SIZE = 3
-BLACK_LIST = []
 TIMEOUT = 300
 
 PORT = 20100
 HOST = ''
+
+BLACK_LIST = []
+blocked = []
+blocked_ips = []
+admins = []
+BLACKLIST_FILE = "blacklist.txt"
+USERNAME_PASSWORD_FILE = "username_password.txt"
+
 
 class Proxy:
     def __init__(self, port, hostname):
@@ -101,16 +109,12 @@ class Proxy:
                 print('[log] Request from host: {}, port: {} to host: {}, port: {} denied'.format(
                     addr[0], addr[1], server, port))
                 return
-
-            # Blacklisted
-            if (server, port) in BLACK_LIST:
-                conn.send('HTTP/1.1 403 Forbidden'.encode('utf-8'))
-                conn.close()
-                print('[log] Request from host: {}, port: {} to host: {}, port: {} denied'.format(
+            # Checking if blacklisted
+            if self.check_blacklist(server, port):
+                print('[log] Request from host: {}, port: {} to host: {}, port: {} denied, blacklisted domain'.format(
                     addr[0], addr[1], server, port))
                 return
 
-            # Connect to server through socket
             try:
                 server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 server_sock.connect((server, port))
@@ -125,13 +129,17 @@ class Proxy:
             if filename + str(server) + str(port) in self.key:
                 if 'must-revalidate' in self.headers[filename + str(server) + str(port)]:
                     print('MUST REVALIDATE')
-                    http_request = 'GET /' + filename + ' HTTP/1.1\r\nIf-Modified-Since: ' + self.updates[filename + str(server) + str(port)] + '\r\n\r\n'
+                    http_request = 'GET /' + filename + ' HTTP/1.1\r\nIf-Modified-Since: ' + \
+                        self.updates[filename +
+                                     str(server) + str(port)] + '\r\n\r\n'
                     server_sock.send(http_request.encode('utf-8'))
                 else:
                     content = self.cached[filename + str(server) + str(port)]
                     print(content)
-                    print('[log] Request serviced from cache, file: {}'.format(filename))
-                    conn.send(str('HTTP/1.1 200 OK\r\n\r\n' + content).encode('utf-8'))
+                    print(
+                        '[log] Request serviced from cache, file: {}'.format(filename))
+                    conn.send(str('HTTP/1.1 200 OK\r\n\r\n' +
+                                  content).encode('utf-8'))
                     conn.close()
                     server_sock.close()
                     return
@@ -144,12 +152,15 @@ class Proxy:
             print(response)
 
             if filename + str(server) + str(port) not in self.cache:
-                self.cache[filename + str(server) + str(port)] = {'time': time.time(), 'count': 0}
+                self.cache[filename + str(server) + str(port)
+                           ] = {'time': time.time(), 'count': 0}
             elif str(filename + str(server) + str(port)) not in self.key:
                 if time.time() - self.cache[filename + str(server) + str(port)]['time'] > TIMEOUT:
-                    self.cache[filename + str(server) + str(port)] = {'time': time.time(), 'count': 0}
+                    self.cache[filename + str(server) + str(port)
+                               ] = {'time': time.time(), 'count': 0}
                 else:
-                    self.cache[filename + str(server) + str(port)]['count'] += 1
+                    self.cache[filename +
+                               str(server) + str(port)]['count'] += 1
 
             # Use cache, or update cache
             if response.find('200') != -1:
@@ -159,9 +170,10 @@ class Proxy:
                         self.cached.pop(self.key[self.NEXT_CACHE])
                         self.headers.pop(self.key[self.NEXT_CACHE])
                         self.updates.pop(self.key[self.NEXT_CACHE])
-                    self.key[self.NEXT_CACHE] = filename + str(server) + str(port)
+                    self.key[self.NEXT_CACHE] = filename + \
+                        str(server) + str(port)
                     self.NEXT_CACHE = (self.NEXT_CACHE + 1) % CACHE_SIZE
-                        
+
                 # Headers
                 content = ''
                 while True:
@@ -176,14 +188,17 @@ class Proxy:
                 if self.cache[filename + str(server) + str(port)]['count'] > 1:
                     self.cached[filename + str(server) + str(port)] = content
                     self.headers[filename + str(server) + str(port)] = res
-                    self.updates[filename + str(server) + str(port)] = res.split('\r\n')[2].split(':', 1)[1].lstrip()
+                    self.updates[filename + str(server) + str(port)] = res.split('\r\n')[
+                        2].split(':', 1)[1].lstrip()
                     print(self.updates[filename + str(server) + str(port)])
-                conn.send(str('HTTP/1.1 200 OK\r\n\r\n' + content).encode('utf-8'))
+                conn.send(str('HTTP/1.1 200 OK\r\n\r\n' +
+                              content).encode('utf-8'))
 
             elif response.find('304') != -1:
-                content = self.cached[filename + str(server) + str(port)] 
+                content = self.cached[filename + str(server) + str(port)]
                 print('[log] Request serviced from cache, file: {}'.format(filename))
-                conn.send(str('HTTP/1.1 200 OK\r\n\r\n' + content).encode('utf-8'))
+                conn.send(str('HTTP/1.1 200 OK\r\n\r\n' +
+                              content).encode('utf-8'))
 
             elif response.find('404') != -1:
                 conn.send('HTTP/1.1 404 File not found\r\n\r\n'.encode('utf-8'))
@@ -201,6 +216,27 @@ class Proxy:
             conn.send(
                 'Error in connecting to server, try again later\n'.encode('utf-8'))
             conn.close()
+
+    def check_blacklist(self, requested_server, requested_port):
+        # if not (details["server_url"] + ":" + str(details["server_port"])) in blocked:
+        #     return False
+        # if not details["auth_b64"]:
+        #     return True
+        # if details["auth_b64"] in admins:
+        #     return False
+        # return True
+        print("checking")
+        print(requested_server+str(requested_port))
+        req = requested_server+":"+str(requested_port)
+        if req in blocked_ips:
+            u = input("Enter username")
+            p = input("Enter password")
+            print(u)
+            print(p)
+            if u == username and p == password:
+                return False
+            return True
+        return False
 
     def requestInfo(self, request):
         '''Function to extract server, port and filename requested from HTTP request'''
@@ -240,18 +276,61 @@ class Proxy:
 
         return (req_type, server, port, filename)
 
-# Generating the blacklist
-f = open('./blacklist.txt', 'r')
-blacklist = f.read()
-entries = blacklist.split('\n')
-while len(blacklist) > 0:
-    for entry in entries:
-        if len(entry) > 0:
-            info = entry.split()
-            BLACK_LIST.append((info[0], info[1]))
-    blacklist  = f.read()
-    entries = blacklist.split('\n')
+
+# # Generating the blacklist
+# f = open('./blacklist.txt', 'r')
+# blacklist = f.read()
+# entries = blacklist.split('\n')
+# while len(blacklist) > 0:
+#     for entry in entries:
+#         if len(entry) > 0:
+#             info = entry.split()
+#             BLACK_LIST.append((info[0], info[1]))
+#     blacklist = f.read()
+#     entries = blacklist.split('\n')
+# f.close()
+
+f = open(BLACKLIST_FILE, "rb")
+data = ""
+while True:
+    chunk = f.read()
+    if not len(chunk):
+        break
+    data += str(chunk)
 f.close()
+blocked = data.split("\\n")
+blocked[0] = blocked[0][2:]
+blocked = blocked[:-1]
+
+for b in blocked:
+    net4 = ipaddress.ip_network(b.split(":")[0])
+    port = b.split(":")[1]
+    for x in net4.hosts():
+        blocked_ips.append(str(x)+":"+port)
+
+
+f = open(USERNAME_PASSWORD_FILE, "rb")
+data = ""
+while True:
+    chunk = f.read()
+    if not len(chunk):
+        break
+    data += str(chunk)
+f.close()
+data = data.splitlines()
+for d in data:
+    # admins.append(base64.b64encode(d))
+    admins.append(d[2:-1].split("\\n")[:-1])
+username = admins[0][0]
+password = admins[0][1]
+
+# print(blocked)
+# print()
+# print(admins)
+# print()
+# # print(blocked_ips)
+# print(username)
+# print(password)
 
 proxy = Proxy(PORT, HOST)
 if proxy.server:
