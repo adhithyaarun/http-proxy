@@ -27,9 +27,9 @@ class Proxy:
         self.services = []
         self.cache = queue.Queue(maxsize=CACHE_SIZE)
 
-        # if os.path.isdir('./.cache'):
-        #     os.makedirs('./.cache')
-        #     print('[log] Cache created')
+        if not os.path.isdir('./.cache'):
+            os.makedirs('./.cache')
+            print('[log] Cache created')
 
     def serverService(self):
         '''Server end of the Proxy Server,
@@ -111,44 +111,53 @@ class Proxy:
 
             # Send request to server
             if str(filename + server + str(port)) in os.listdir('./.cache'):
-                server_sock.send('GET /' + filename + ' HTTP/1.1\r\nIf-Modified-Since: ' + time.ctime(
-                    os.path.getmtime('./.cache/' + str(filename + server + str(port)))) + ' \r\n\r\n')
+                http_request = 'GET /' + filename + ' HTTP/1.1\r\nIf-Modified-Since: ' + time.ctime(os.path.getmtime('./.cache/' + str(filename + server + str(port)))) + ' \r\n\r\n'
+                server_sock.send(http_request.encode('utf-8'))
             else:
-                server_sock.send('GET /' + filename + 'HTTP/1.1\r\n\r\n')
+                http_request = 'GET /' + filename + ' HTTP/1.1\r\n\r\n'
+                server_sock.send(http_request.encode('utf-8'))
 
             # Get response from server
-            response = str(server_sock.recv(BUFFER_SIZE))
+            response = str(server_sock.recv(BUFFER_SIZE))[2:-1]
 
             print(response)
 
             # Use cache, or update cache
             if response.find('200') != -1:
                 f = open(os.path.join(
-                    './.cache/', str(filename + server + port)), 'wb')
+                    './.cache/', str(filename + server + str(port))), 'wb')
                 while True:
+                    response = str(server_sock.recv(BUFFER_SIZE))[2:-1]
                     if len(response) > 0:
+                        print('Length: {}'.format(len(response)))
                         f.write(response.encode('utf-8'))
                         conn.send(response.encode('utf-8'))
                         # res_size = float(len(response)) / 1024
                         # print('[log] Request serviced by server \n\tfile: {}\n\tsize: {}'.format(filename, res_size))
-                        response = str(server_sock.recv(BUFFER_SIZE))
+                        response = str(server_sock.recv(BUFFER_SIZE))[2:-1]
                     else:
                         break
                 f.close()
             elif response.find('304') != -1:
                 f = open(os.path.join(
-                    './.cache/', str(filename + server + port)), 'rb')
-                line = f.read(BUFFER_SIZE)
+                    './.cache/', str(filename + server + str(port))), 'rb')
+                line = str(f.read(BUFFER_SIZE))
                 while line:
-                    conn.send(line)
+                    conn.send(line.encode('utf-8'))
                     # res_size = float(len(line) / 1024)
                     # print('[log] Request serviced from cache \n\tfile: {}\n\tsize: {}'.format(filename, res_size))
-                    line = f.read(BUFFER_SIZE)
+                    line = str(f.read(BUFFER_SIZE))
                 f.close()
+            elif response.find('404') != -1:
+                conn.send('File not found\n'.encode('utf-8'))
+                conn.close()
+                print('[log] Requested file not found')
+                return
             else:
                 print('[log] Response from server: {}'.format(response))
 
             server_sock.close()
+            conn.close()
             # conn.send('Acknowledgement\n'.encode('utf-8'))
         except Exception as e:
             print('[log] Error: {}'.format(str(e)))
