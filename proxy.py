@@ -1,6 +1,5 @@
 '''Proxy Server'''
 import os
-import queue
 import socket
 import sys
 import threading
@@ -11,6 +10,7 @@ MAX_CONNECTION = 25
 ALLOWED_ACTIONS = ['GET', 'POST']
 CACHE_SIZE = 3
 BLACK_LIST = []
+TIMEOUT = 300
 
 PORT = 20100
 HOST = ''
@@ -25,11 +25,12 @@ class Proxy:
             print('[log] Socket cration error: {}'.format(err))
 
         self.services = []
-        self.cache = queue.Queue(maxsize=CACHE_SIZE)
-
-        if not os.path.isdir('./.cache'):
-            os.makedirs('./.cache')
-            print('[log] Cache created')
+        self.cache = {}
+        self.NEXT_CACHE = 0
+        self.key = ['', '', '']
+        self.cached = {}
+        self.headers = {}
+        self.updates = {}
 
     def serverService(self):
         '''Server end of the Proxy Server,
@@ -70,8 +71,9 @@ class Proxy:
     def clientService(self, conn, addr):
         '''Client end of the Proxy Server, that will make requests to servers,
         get data and send to the client'''
+        # Constrain requests from within IIIT only
         if addr[1] < 20000 or addr[1] > 20099:
-            conn.send('HTTP/1.1 401 Access denied.'.encode('utf-8'))
+            conn.send('HTTP/1.1 401 Access denied'.encode('utf-8'))
             conn.close()
             print('[log] Connection from host: {}, port: {} denied'.format(
                 addr[0], addr[1]))
@@ -100,7 +102,15 @@ class Proxy:
                     addr[0], addr[1], server, port))
                 return
 
-            # Connect to server
+            # Blacklisted
+            if (server, port) in BLACK_LIST:
+                conn.send('HTTP/1.1 403 Forbidden'.encode('utf-8'))
+                conn.close()
+                print('[log] Request from host: {}, port: {} to host: {}, port: {} denied'.format(
+                    addr[0], addr[1], server, port))
+                return
+
+            # Connect to server through socket
             try:
                 server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 server_sock.connect((server, port))
@@ -109,51 +119,70 @@ class Proxy:
                 conn.send('HTTP/1.1 500 Internal server error'.encode('utf-8'))
                 conn.close()
                 return
-
+            print('Headers:')
+            print(self.headers)
             # Send request to server
-            if str(filename + server + str(port)) in os.listdir('./.cache'):
-                http_request = 'GET /' + filename + ' HTTP/1.1\r\nIf-Modified-Since: ' + time.ctime(os.path.getmtime('./.cache/' + str(filename + server + str(port)))) + ' \r\n\r\n'
-                server_sock.send(http_request.encode('utf-8'))
+            if filename + str(server) + str(port) in self.key:
+                if 'must-revalidate' in self.headers[filename + str(server) + str(port)]:
+                    print('MUST REVALIDATE')
+                    http_request = 'GET /' + filename + ' HTTP/1.1\r\nIf-Modified-Since: ' + self.updates[filename + str(server) + str(port)] + ' \r\n\r\n'
+                    server_sock.send(http_request.encode('utf-8'))
+                else:
+                    content = self.cached[filename + str(server) + str(port)]
+                    print(content)
+                    print('[log] Request serviced from cache, file: {}'.format(filename))
+                    conn.send(str('HTTP/1.1 200 OK\r\n\r\n' + content).encode('utf-8'))
+                    conn.close()
+                    server_sock.close()
+                    return
             else:
                 http_request = 'GET /' + filename + ' HTTP/1.1\r\n\r\n'
                 server_sock.send(http_request.encode('utf-8'))
 
             # Get response from server
             response = server_sock.recv(BUFFER_SIZE).decode()
+            print(response)
+
+            if filename + str(server) + str(port) not in self.cache:
+                self.cache[filename + str(server) + str(port)] = {'time': time.time(), 'count': 0}
+            elif str(filename + str(server) + str(port)) not in self.key:
+                if time.time() - self.cache[filename + str(server) + str(port)]['time'] > TIMEOUT:
+                    self.cache[filename + str(server) + str(port)] = {'time': time.time(), 'count': 0}
+                else:
+                    self.cache[filename + str(server) + str(port)]['count'] += 1
 
             # Use cache, or update cache
             if response.find('200') != -1:
-                f = open(os.path.join(
-                    './.cache/', str(filename + server + str(port))), 'wb')
+                res = response
+                if self.cache[filename + str(server) + str(port)]['count'] > 1:
+                    if filename + str(server) + str(port) not in self.key and self.key[self.NEXT_CACHE] != '':
+                        self.cached.pop(self.key[self.NEXT_CACHE])
+                        self.headers.pop(self.key[self.NEXT_CACHE])
+                        self.updates.pop(self.key[self.NEXT_CACHE])
+                    self.key[self.NEXT_CACHE] = filename + str(server) + str(port)
+                    self.NEXT_CACHE = (self.NEXT_CACHE + 1) % CACHE_SIZE
+                        
                 # Headers
-                content = server_sock.recv(BUFFER_SIZE).decode()
-                content = server_sock.recv(BUFFER_SIZE).decode()
-                content = server_sock.recv(BUFFER_SIZE).decode()
-                content = server_sock.recv(BUFFER_SIZE).decode()
                 content = ''
                 while True:
                     response = server_sock.recv(BUFFER_SIZE).decode()
+                    print(response)
                     if len(response) > 0:
-                        f.write(response.encode('utf-8'))
                         content += response
-                        # res_size = float(len(response)) / 1024
-                        # print('[log] Request serviced by server \n\tfile: {}\n\tsize: {} MB'.format(filename, res_size))
                     else:
                         break
-                f.close()
+                print(content)
+                print('[log] Request serviced by server, file: {}'.format(filename))
+                if self.cache[filename + str(server) + str(port)]['count'] > 1:
+                    self.cached[filename + str(server) + str(port)] = content
+                    self.headers[filename + str(server) + str(port)] = res
+                    self.updates[filename + str(server) + str(port)] = res.split('\r\n')[2].split(':')[1].lstrip()
+                    print(self.updates[filename + str(server) + str(port)])
                 conn.send(str('HTTP/1.1 200 OK\r\n\r\n' + content).encode('utf-8'))
 
             elif response.find('304') != -1:
-                f = open(os.path.join(
-                    './.cache/', str(filename + server + str(port))), 'rb')
-                line = f.read(BUFFER_SIZE).decode()
-                content = ''
-                while len(line) > 0:
-                    content += line 
-                    # res_size = float(len(line) / 1024)
-                    # print('[log] Request serviced from cache \n\tfile: {}\n\tsize: {} MB'.format(filename, res_size))
-                    line = f.read(BUFFER_SIZE).decode()
-                f.close()
+                content = self.cached[filename + str(server) + str(port)] 
+                print('[log] Request serviced from cache, file: {}'.format(filename))
                 conn.send(str('HTTP/1.1 200 OK\r\n\r\n' + content).encode('utf-8'))
 
             elif response.find('404') != -1:
@@ -222,6 +251,7 @@ while len(blacklist) > 0:
             BLACK_LIST.append((info[0], info[1]))
     blacklist  = f.read()
     entries = blacklist.split('\n')
+f.close()
 
 proxy = Proxy(PORT, HOST)
 if proxy.server:

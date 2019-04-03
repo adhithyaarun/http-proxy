@@ -1,52 +1,72 @@
 import os
-import SimpleHTTPServer
-import SocketServer
+from http.server import SimpleHTTPRequestHandler
+import socketserver
 import threading
 import time
 
 threads = []
 
-class HTTPCacheRequestHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
-    def send_head(self):
-        if self.command != "POST" and self.headers.get('If-Modified-Since', None):
-            filename = self.path.strip("/")
+class HTTPCacheRequestHandler(SimpleHTTPRequestHandler):
+    def do_GET(self):
+        filename = self.path.strip('/')
+        try:
+            f = open(os.path.join('./', filename), 'r')
+        except Exception:
+            self.send_response(404)
+            self.end_headers()
+            self.wfile.write('File not found\r\n\r\n'.encode())
+            return
+
+        if self.headers.get('If-Modified-Since', None):
             if os.path.isfile(os.path.join('./', filename)):
-                a = time.strptime(time.ctime(
-                    os.path.getmtime(filename)), "%a %b %d %H:%M:%S %Y")
+                a = time.gmtime(time.mktime(time.strptime(time.ctime(
+                    os.path.getmtime(filename)), "%a %b %d %H:%M:%S %Y")))
                 b = time.strptime(self.headers.get(
-                    'If-Modified-Since', None), "%a %b  %d %H:%M:%S %Y")
+                    'If-Modified-Since', None), "%a, %d %b %Y %H:%M:%S GMT")
                 if a < b:
                     self.send_response(304)
                     self.end_headers()
-                    f = open(os.path.join('./', filename), 'r')
-                    line = str(f.read(4096))
-                    while len(line) > 0:
-                        self.wfile.write(line.encode('utf-8'))
-                        line = str(f.read(4096))
-                    return None
-        return SimpleHTTPServer.SimpleHTTPRequestHandler.send_head(self)
-
-    def end_headers(self):
-        filename = self.path.strip('/')
-        if filename == '2.binary':
-            self.send_header('Cache-control', 'no-cache')
+                else:
+                    print(a > b)
+                    self.send_response(200)
+                    self.send_header('Cache-control', 'must-revalidate')
+                    self.end_headers()
+                    data = f.read()
+                    self.wfile.write(data)
         else:
+            self.send_response(200)
             self.send_header('Cache-control', 'must-revalidate')
-        SimpleHTTPServer.SimpleHTTPRequestHandler.end_headers(self)
+            self.end_headers()
+            f = open(os.path.join('./', filename), 'r')
+            data = f.read()
+            self.wfile.write(data.encode())
+
+        return
+    def do_POST(self):
+        filename = self.path.strip('/')
+        try:
+            f = open(os.path.join('./', filename), 'r')
+            data = f.read()
+            self.wfile.write(data.encode())
+        except Exception:
+            self.send_response(404)
+            self.end_headers()
+            self.wfile.write('File not found\r\n\r\n'.encode())
 
 
-# Handler = SimpleHTTPServer.SimpleHTTPRequestHandler
 
-http1 = SocketServer.TCPServer(("", 20101), HTTPCacheRequestHandler)
-http2 = SocketServer.TCPServer(("", 20102), HTTPCacheRequestHandler)
-http3 = SocketServer.TCPServer(("", 20103), HTTPCacheRequestHandler)
 
-threads.append(threading.Thread(target=http1.serve_forever))
-threads.append(threading.Thread(target=http2.serve_forever))
-threads.append(threading.Thread(target=http3.serve_forever))
+http1 = socketserver.TCPServer(('', 20103), HTTPCacheRequestHandler)
+# http2 = socketserver.TCPServer(('', 20105), HTTPCacheRequestHandler)
+# http3 = socketserver.TCPServer(('', 20106), HTTPCacheRequestHandler)
 
-for t in threads:
-    t.start()
+# threads.append(threading.Thread(target=http1.serve_forever))
+# threads.append(threading.Thread(target=http2.serve_forever))
+# threads.append(threading.Thread(target=http3.serve_forever))
 
-for t in threads:
-    t.join()
+# for t in threads:
+#     t.start()
+
+# for t in threads:
+#     t.join()
+http1.serve_forever()
