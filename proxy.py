@@ -125,7 +125,7 @@ class Proxy:
             if filename + str(server) + str(port) in self.key:
                 if 'must-revalidate' in self.headers[filename + str(server) + str(port)]:
                     print('MUST REVALIDATE')
-                    http_request = 'GET /' + filename + ' HTTP/1.1\r\nIf-Modified-Since: ' + self.updates[filename + str(server) + str(port)] + ' \r\n\r\n'
+                    http_request = 'GET /' + filename + ' HTTP/1.1\r\nIf-Modified-Since: ' + self.updates[filename + str(server) + str(port)] + '\r\n\r\n'
                     server_sock.send(http_request.encode('utf-8'))
                 else:
                     content = self.cached[filename + str(server) + str(port)]
@@ -176,7 +176,7 @@ class Proxy:
                 if self.cache[filename + str(server) + str(port)]['count'] > 1:
                     self.cached[filename + str(server) + str(port)] = content
                     self.headers[filename + str(server) + str(port)] = res
-                    self.updates[filename + str(server) + str(port)] = res.split('\r\n')[2].split(':')[1].lstrip()
+                    self.updates[filename + str(server) + str(port)] = res.split('\r\n')[2].split(':', 1)[1].lstrip()
                     print(self.updates[filename + str(server) + str(port)])
                 conn.send(str('HTTP/1.1 200 OK\r\n\r\n' + content).encode('utf-8'))
 
